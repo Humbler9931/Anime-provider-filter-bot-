@@ -404,16 +404,17 @@ if __name__ == "__main__":
     api_thread = threading.Thread(target=run_api)
     api_thread.start()
     
+    async def delete_filter(self, keyword):
     start_bot()
-        if self.use_mongo:
-            result = await self.filter_collection.delete_one({'keyword': keyword})
-            return result.deleted_count > 0
-        else:
-            if keyword in self.local_filters:
-                del self.local_filters[keyword]
-                self._save_json()
-                return True
-            return False
+    if self.use_mongo:
+        result = await self.filter_collection.delete_one({'keyword': keyword})
+        return result.deleted_count > 0
+    else:
+        if keyword in self.local_filters:
+            del self.local_filters[keyword]
+            self._save_json()
+            return True
+        return False
 
     # --- User Methods (Broadcast ke liye) ---
     async def add_user(self, user_id: int):
