@@ -1,1 +1,24 @@
-
+services:
+  - type: web
+    name: filter-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: BOT_TOKEN
+        value: "APNA_BOT_TOKEN_YAHAN_DALEN"
+      - key: API_ID
+        value: "APNA_API_ID_YAHAN_DALEN"
+      - key: API_HASH
+        value: "APNA_API_HASH_YAHAN_DALEN"
+      - key: MONGO_URI
+        value: "mongodb+srv://user:password@clustername.mongodb.net/?retryWrites=true&w=majority"
+      - key: ADMIN_IDS
+        value: "APNE_ADMIN_USER_ID_YAHAN_DALEN"
+      - key: JSON_FILTER_FILE
+        value: "filters.json"
+      - key: JSON_USER_FILE
+        value: "users.json"
+      - key: START_PHOTO_URL
+        value: "https://envs.sh/GhJ.jpg/IMG20250925634.jpg"
