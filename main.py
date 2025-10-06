@@ -12,29 +12,26 @@ from pyrogram.errors import (
     UserIsBlocked, PeerIdInvalid, RPCError, FloodWait, 
     ChatAdminRequired, UserNotParticipant, MessageDeleteForbidden
 )
-from motor.motor_asyncio import AsyncIOMotorClient
 from fastapi import FastAPI
 import uvicorn
 import threading
 from typing import Optional, Dict, List
 import logging
 
-# Configure logging
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# --- Configuration and Setup ---
-
+# Load environment variables
 load_dotenv()
 
-# Environment Variables with validation
+# Configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH")
-MONGO_URI = os.environ.get("MONGO_URI")
 JSON_FILTER_FILE = os.environ.get("JSON_FILTER_FILE", "filters.json")
 JSON_USER_FILE = os.environ.get("JSON_USER_FILE", "users.json")
 START_PHOTO_URL = os.environ.get(
@@ -44,9 +41,9 @@ START_PHOTO_URL = os.environ.get(
 SUPPORT_CHAT = os.environ.get("SUPPORT_CHAT", "teamrajweb")
 UPDATE_CHANNEL = os.environ.get("UPDATE_CHANNEL", "teamrajweb")
 
-# Validate critical environment variables
+# Validate critical variables
 if not BOT_TOKEN or not API_ID or not API_HASH:
-    raise ValueError("BOT_TOKEN, API_ID, and API_HASH must be set in environment variables!")
+    raise ValueError("BOT_TOKEN, API_ID, and API_HASH are required!")
 
 ADMIN_IDS = []
 try:
@@ -54,7 +51,7 @@ try:
     if admin_ids_str:
         ADMIN_IDS = [int(uid.strip()) for uid in admin_ids_str.split(',') if uid.strip()]
 except ValueError as e:
-    logger.error(f"Invalid ADMIN_IDS format: {e}")
+    logger.error(f"Invalid ADMIN_IDS: {e}")
 
 # Pyrogram Client
 app = Client(
@@ -67,13 +64,11 @@ app = Client(
 )
 
 
-# --- Advanced Storage System ---
-
-class AdvancedStorage:
-    """Enhanced Storage with MongoDB + JSON fallback"""
+# Storage System (JSON only for simplicity)
+class Storage:
+    """JSON-based storage system"""
     
     def __init__(self):
-        self.use_mongo = False
         self.local_filters = {}
         self.local_users = {}
         self.local_groups = {}
@@ -82,36 +77,7 @@ class AdvancedStorage:
             "total_broadcasts": 0,
             "bot_started": time.time()
         }
-        self._init_mongodb()
-        if not self.use_mongo:
-            self._load_json()
-
-    def _init_mongodb(self):
-        """Initialize MongoDB connection"""
-        if not MONGO_URI:
-            logger.warning("MONGO_URI not provided, using JSON fallback")
-            return
-            
-        try:
-            self.db_client = AsyncIOMotorClient(
-                MONGO_URI, 
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=5000
-            )
-            # Test connection
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.db_client.admin.command('ping'))
-            loop.close()
-            
-            self.filter_collection = self.db_client["filter_db"]["filters"]
-            self.user_collection = self.db_client["filter_db"]["users"]
-            self.group_collection = self.db_client["filter_db"]["groups"]
-            self.stats_collection = self.db_client["filter_db"]["stats"]
-            self.use_mongo = True
-            logger.info("✅ MongoDB connected successfully")
-        except Exception as e:
-            logger.error(f"MongoDB connection failed: {e}. Using JSON fallback")
+        self._load_json()
 
     def _load_json(self):
         """Load data from JSON files"""
@@ -150,131 +116,71 @@ class AdvancedStorage:
             except Exception as e:
                 logger.error(f"Error saving {filename}: {e}")
 
-    # --- Filter Methods ---
-    
     async def add_filter(self, keyword: str, file_data: dict):
-        """Add filter with metadata"""
         keyword = keyword.lower().strip()
         file_data['added_at'] = time.time()
         
-        if self.use_mongo:
-            await self.filter_collection.update_one(
-                {'keyword': keyword},
-                {'$push': {'files': file_data}},
-                upsert=True
-            )
-        else:
-            if keyword not in self.local_filters:
-                self.local_filters[keyword] = []
-            self.local_filters[keyword].append(file_data)
-            self._save_json()
+        if keyword not in self.local_filters:
+            self.local_filters[keyword] = []
+        self.local_filters[keyword].append(file_data)
+        self._save_json()
 
     async def get_all_filters(self) -> Dict:
-        """Get all filters"""
-        if self.use_mongo:
-            filters_dict = {}
-            async for doc in self.filter_collection.find({}):
-                filters_dict[doc['keyword']] = doc['files']
-            return filters_dict
         return self.local_filters
 
     async def delete_filter(self, keyword: str) -> bool:
-        """Delete filter"""
         keyword = keyword.lower().strip()
-        
-        if self.use_mongo:
-            result = await self.filter_collection.delete_one({'keyword': keyword})
-            return result.deleted_count > 0
-        else:
-            if keyword in self.local_filters:
-                del self.local_filters[keyword]
-                self._save_json()
-                return True
-            return False
+        if keyword in self.local_filters:
+            del self.local_filters[keyword]
+            self._save_json()
+            return True
+        return False
 
     async def search_filters(self, query: str) -> List[str]:
-        """Search filters by keyword"""
         query = query.lower().strip()
-        all_filters = await self.get_all_filters()
-        return [k for k in all_filters.keys() if query in k]
+        return [k for k in self.local_filters.keys() if query in k]
 
-    # --- User Management ---
-    
     async def add_user(self, user_id: int, user_data: Optional[Dict] = None):
-        """Add/Update user"""
         user_id_str = str(user_id)
         current_time = time.time()
         
-        # Get existing user info if available
-        existing_user = await self.get_user_info(user_id)
+        existing_user = self.local_users.get(user_id_str, {})
         
         user_info = {
             'last_seen': current_time,
             'username': user_data.get('username', '') if user_data else '',
             'first_name': user_data.get('first_name', '') if user_data else '',
-            'search_count': existing_user.get('search_count', 0) if existing_user else 0
+            'search_count': existing_user.get('search_count', 0)
         }
         
-        if self.use_mongo:
-            await self.user_collection.update_one(
-                {'_id': user_id_str},
-                {'$set': user_info, '$setOnInsert': {'join_date': current_time}},
-                upsert=True
-            )
+        if user_id_str not in self.local_users:
+            user_info['join_date'] = current_time
         else:
-            if user_id_str not in self.local_users:
-                user_info['join_date'] = current_time
-            else:
-                user_info['join_date'] = self.local_users[user_id_str].get('join_date', current_time)
-                user_info['search_count'] = self.local_users[user_id_str].get('search_count', 0)
-            
-            self.local_users[user_id_str] = user_info
-            self._save_json()
+            user_info['join_date'] = existing_user.get('join_date', current_time)
+        
+        self.local_users[user_id_str] = user_info
+        self._save_json()
 
     async def get_user_info(self, user_id: int) -> Optional[Dict]:
-        """Get user info"""
-        user_id_str = str(user_id)
-        
-        if self.use_mongo:
-            return await self.user_collection.find_one({'_id': user_id_str})
-        return self.local_users.get(user_id_str)
+        return self.local_users.get(str(user_id))
 
     async def increment_user_search(self, user_id: int):
-        """Increment user's search count"""
         user_id_str = str(user_id)
-        
-        if self.use_mongo:
-            await self.user_collection.update_one(
-                {'_id': user_id_str},
-                {'$inc': {'search_count': 1}}
-            )
-        else:
-            if user_id_str in self.local_users:
-                self.local_users[user_id_str]['search_count'] = \
-                    self.local_users[user_id_str].get('search_count', 0) + 1
-                self._save_json()
+        if user_id_str in self.local_users:
+            self.local_users[user_id_str]['search_count'] = \
+                self.local_users[user_id_str].get('search_count', 0) + 1
+            self._save_json()
 
     async def get_all_users(self) -> List[str]:
-        """Get all user IDs"""
-        if self.use_mongo:
-            return [str(doc['_id']) async for doc in self.user_collection.find({})]
         return list(self.local_users.keys())
 
     async def remove_user(self, user_id: int):
-        """Remove user"""
         user_id_str = str(user_id)
-        
-        if self.use_mongo:
-            await self.user_collection.delete_one({'_id': user_id_str})
-        else:
-            if user_id_str in self.local_users:
-                del self.local_users[user_id_str]
-                self._save_json()
+        if user_id_str in self.local_users:
+            del self.local_users[user_id_str]
+            self._save_json()
 
-    # --- Group Management ---
-    
     async def add_group(self, chat_id: int, chat_data: Dict):
-        """Add/Update group"""
         chat_id_str = str(chat_id)
         current_time = time.time()
         
@@ -285,71 +191,38 @@ class AdvancedStorage:
             'last_active': current_time,
         }
         
-        if self.use_mongo:
-            await self.group_collection.update_one(
-                {'_id': chat_id_str},
-                {'$set': group_info, '$setOnInsert': {'join_date': current_time}},
-                upsert=True
-            )
+        if chat_id_str not in self.local_groups:
+            group_info['join_date'] = current_time
         else:
-            if chat_id_str not in self.local_groups:
-                group_info['join_date'] = current_time
-            else:
-                group_info['join_date'] = self.local_groups[chat_id_str].get('join_date', current_time)
-            
-            self.local_groups[chat_id_str] = group_info
-            self._save_json()
+            group_info['join_date'] = self.local_groups[chat_id_str].get('join_date', current_time)
+        
+        self.local_groups[chat_id_str] = group_info
+        self._save_json()
 
     async def get_all_groups(self) -> List[str]:
-        """Get all group IDs"""
-        if self.use_mongo:
-            return [str(doc['_id']) async for doc in self.group_collection.find({})]
         return list(self.local_groups.keys())
 
-    # --- Statistics ---
-    
     async def increment_stat(self, stat_name: str):
-        """Increment statistic"""
-        if self.use_mongo:
-            await self.stats_collection.update_one(
-                {'_id': 'global'},
-                {'$inc': {stat_name: 1}},
-                upsert=True
-            )
-        else:
-            self.local_stats[stat_name] = self.local_stats.get(stat_name, 0) + 1
-            self._save_json()
+        self.local_stats[stat_name] = self.local_stats.get(stat_name, 0) + 1
+        self._save_json()
 
     async def get_stats(self) -> Dict:
-        """Get statistics"""
-        if self.use_mongo:
-            stats = await self.stats_collection.find_one({'_id': 'global'})
-            if not stats:
-                return {'bot_started': self.local_stats.get('bot_started', time.time())}
-            stats.pop('_id', None)
-            stats['bot_started'] = self.local_stats.get('bot_started', time.time())
-            return stats
         return self.local_stats
 
 
-# Initialize storage
-STORAGE = AdvancedStorage()
+STORAGE = Storage()
 
 
-# --- Custom Filters ---
-
+# Custom filter for admin
 def is_admin(_, __, message: Message):
     return message.from_user and message.from_user.id in ADMIN_IDS
 
 admin_only = filters.create(is_admin)
 
 
-# --- Start Command ---
-
+# Start Command
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
-    """Enhanced start command"""
-    
     if message.chat.type == ChatType.PRIVATE:
         user_data = {
             'username': message.from_user.username or '',
@@ -362,18 +235,18 @@ async def start_command(client: Client, message: Message):
 
 **👋 HEY {message.from_user.first_name}!**
 
-**🌟 WELCOME TO THE ADVANCED AUTO-FILTER BOT! 🌟**
+**🌟 WELCOME TO ADVANCED AUTO-FILTER BOT! 🌟**
 
-**⚡ PREMIUM FEATURES ⚡**
+**⚡ FEATURES ⚡**
 ━━━━━━━━━━━━━━━━━━━━
 ✨ Lightning Fast Search
-🎯 Smart Auto-Filter System
-🔥 Unlimited Movie Collection
+🎯 Smart Auto-Filter
+🔥 Unlimited Collection
 📊 Advanced Analytics
-🛡️ 24/7 Active Support
+🛡️ 24/7 Support
 ━━━━━━━━━━━━━━━━━━━━
 
-**💎 ADD ME TO YOUR GROUP & ENJOY! 💎**
+**💎 ADD ME TO YOUR GROUP! 💎**
 
 **🔗 MAINTAINED BY:** [TEAM NARZO](https://t.me/{SUPPORT_CHAT})
 
@@ -386,10 +259,10 @@ async def start_command(client: Client, message: Message):
             InlineKeyboardButton("ℹ️ About", callback_data="about_info")
         ],
         [
-            InlineKeyboardButton("📊 Statistics", callback_data="user_stats")
+            InlineKeyboardButton("📊 My Stats", callback_data="user_stats")
         ],
         [
-            InlineKeyboardButton("➕ Add Me To Your Group ➕", 
+            InlineKeyboardButton("➕ Add Me To Group ➕", 
                                url=f"http://t.me/{client.me.username}?startgroup=true")
         ],
         [
@@ -416,12 +289,9 @@ async def start_command(client: Client, message: Message):
         )
 
 
-# --- Stats Command ---
-
+# Stats Command
 @app.on_message(filters.command("stats") & admin_only)
 async def stats_handler(client: Client, message: Message):
-    """Bot statistics"""
-    
     users = await STORAGE.get_all_users()
     groups = await STORAGE.get_all_groups()
     filters_dict = await STORAGE.get_all_filters()
@@ -446,7 +316,7 @@ async def stats_handler(client: Client, message: Message):
 
 **⚙️ SYSTEM INFO:**
 ━━━━━━━━━━━━━━━━━━
-• **Storage:** `{'🟢 MongoDB' if STORAGE.use_mongo else '🟡 JSON'}`
+• **Storage:** `JSON`
 • **Uptime:** `{uptime_str}`
 • **Broadcasts:** `{stats.get('total_broadcasts', 0)}`
 
@@ -460,11 +330,9 @@ async def stats_handler(client: Client, message: Message):
     await message.reply_text(stats_msg, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
 
-# --- Ping Command ---
-
+# Ping Command
 @app.on_message(filters.command("ping"))
 async def ping_handler(client: Client, message: Message):
-    """Latency check"""
     start_time = time.time()
     sent_message = await message.reply_text("🏓 **Pinging...**")
     end_time = time.time()
@@ -482,26 +350,20 @@ async def ping_handler(client: Client, message: Message):
         f"╔═══❰ 🏓 PONG! 🏓 ❱═══╗\n\n"
         f"{emoji} **Latency:** `{latency} ms`\n"
         f"📶 **Status:** `{status}`\n"
-        f"💾 **Storage:** `{'MongoDB' if STORAGE.use_mongo else 'JSON'}`\n\n"
+        f"💾 **Storage:** `JSON`\n\n"
         f"╚═══════════════════════╝",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# --- Broadcast ---
-
+# Broadcast
 @app.on_message(filters.command("broadcast") & admin_only & filters.reply)
 async def broadcast_handler(client: Client, message: Message):
-    """Broadcast message to all users"""
-    
     replied_msg = message.reply_to_message
     if not replied_msg:
         return await message.reply_text("❌ Reply to a message to broadcast")
         
-    status_msg = await message.reply_text(
-        "📡 **Initializing broadcast...**",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    status_msg = await message.reply_text("📡 **Starting broadcast...**", parse_mode=ParseMode.MARKDOWN)
     
     user_ids = await STORAGE.get_all_users()
     total = len(user_ids)
@@ -535,7 +397,7 @@ async def broadcast_handler(client: Client, message: Message):
                     f"✅ Sent: `{success}` | ❌ Failed: `{failed}`",
                     parse_mode=ParseMode.MARKDOWN
                 )
-            except (FloodWait, MessageDeleteForbidden):
+            except:
                 pass
     
     duration = round(time.time() - start_time, 2)
@@ -552,15 +414,12 @@ async def broadcast_handler(client: Client, message: Message):
     )
 
 
-# --- Filter Management ---
-
+# Add Filter
 @app.on_message(filters.command("addfilter") & admin_only & filters.reply)
 async def add_filter_handler(client: Client, message: Message):
-    """Add filter"""
     if len(message.command) < 2:
         return await message.reply_text(
-            "**Usage:** `/addfilter <keyword>`\n"
-            "**Note:** Reply to a message",
+            "**Usage:** `/addfilter <keyword>`\n**Note:** Reply to a message",
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -569,7 +428,12 @@ async def add_filter_handler(client: Client, message: Message):
     
     file_type = "text"
     if replied_msg.media:
-        file_type = str(replied_msg.media).lower()
+        if replied_msg.document:
+            file_type = "document"
+        elif replied_msg.photo:
+            file_type = "photo"
+        elif replied_msg.video:
+            file_type = "video"
         
     file_data = {
         "chat_id": replied_msg.chat.id,
@@ -588,9 +452,9 @@ async def add_filter_handler(client: Client, message: Message):
     )
 
 
+# Delete Filter
 @app.on_message(filters.command("delfilter") & admin_only)
 async def del_filter_handler(client: Client, message: Message):
-    """Delete filter"""
     if len(message.command) < 2:
         return await message.reply_text("**Usage:** `/delfilter <keyword>`", parse_mode=ParseMode.MARKDOWN)
 
@@ -602,9 +466,9 @@ async def del_filter_handler(client: Client, message: Message):
         await message.reply_text(f"❌ Filter `{keyword}` not found!", parse_mode=ParseMode.MARKDOWN)
 
 
+# List Filters
 @app.on_message(filters.command("listfilters") & admin_only)
 async def list_filters_handler(client: Client, message: Message):
-    """List all filters"""
     all_filters = await STORAGE.get_all_filters()
     
     if not all_filters:
@@ -628,19 +492,19 @@ async def list_filters_handler(client: Client, message: Message):
     )
 
 
-# --- Smart Keyword Matching ---
-
+# Keyword Matching Handler
 @app.on_message(
     filters.text & 
-    (filters.private | filters.group) & 
-    ~filters.edited & 
+    (filters.private | filters.group) &
     ~filters.command([
         "start", "help", "stats", "ping", "addfilter", 
         "delfilter", "listfilters", "broadcast", "myinfo"
     ])
 )
 async def keyword_match_handler(client: Client, message: Message):
-    """Smart keyword matching"""
+    # Ignore edited messages
+    if message.edit_date:
+        return
     
     # Store user/group info
     if message.chat.type == ChatType.PRIVATE:
@@ -698,11 +562,9 @@ async def keyword_match_handler(client: Client, message: Message):
                     logger.error(f"Error forwarding: {e}")
 
 
-# --- Callback Handler ---
-
+# Callback Handler
 @app.on_callback_query()
 async def callback_handler(client: Client, callback_query: CallbackQuery):
-    """Handle callbacks"""
     data = callback_query.data
     user_id = callback_query.from_user.id
     
@@ -740,7 +602,7 @@ async def callback_handler(client: Client, callback_query: CallbackQuery):
 
 **👋 Welcome {callback_query.from_user.first_name}!**
 
-Use the buttons below to navigate.
+Use buttons below to navigate.
 
 ╚═══════════════════════════╝
 """
@@ -768,7 +630,7 @@ Use the buttons below to navigate.
 **Statistics:**
 • Users: `{len(users)}`
 • Groups: `{len(groups)}`
-• Storage: `{'MongoDB' if STORAGE.use_mongo else 'JSON'}`
+• Storage: `JSON`
 
 **Developer:** TEAM NARZO
 **Support:** @{SUPPORT_CHAT}
@@ -813,9 +675,9 @@ Use the buttons below to navigate.
 
         elif data == "refresh_stats":
             if user_id in ADMIN_IDS:
-                await callback_query.answer("Refreshing stats...", show_alert=False)
-                # Trigger stats refresh
-                await stats_handler(client, callback_query.message)
+                await callback_query.answer("Refreshing...", show_alert=False)
+                if callback_query.message:
+                    await stats_handler(client, callback_query.message)
             else:
                 await callback_query.answer("❌ Admin only!", show_alert=True)
 
@@ -827,11 +689,9 @@ Use the buttons below to navigate.
         await callback_query.answer("❌ Error occurred!", show_alert=True)
 
 
-# --- Additional Commands ---
-
+# My Info Command
 @app.on_message(filters.command("myinfo"))
 async def my_info_handler(client: Client, message: Message):
-    """User's personal info"""
     user_id = message.from_user.id
     user_info = await STORAGE.get_user_info(user_id)
     
@@ -854,40 +714,36 @@ async def my_info_handler(client: Client, message: Message):
     await message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
 
 
+# Help Command
 @app.on_message(filters.command("help"))
 async def help_handler(client: Client, message: Message):
-    """Help command"""
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📚 View Commands", callback_data="help_commands")]
     ])
     
     await message.reply_text(
-        "**👋 Need Help?**\n\nClick below to see all commands!",
+        "**👋 Need Help?**\n\nClick below for all commands!",
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# --- FastAPI Setup ---
-
+# FastAPI Setup
 api = FastAPI(title="Team Narzo Bot API", version="3.0")
 
 @api.get("/")
 def health_check():
-    """Health check endpoint"""
     uptime = time.time() - STORAGE.local_stats.get('bot_started', time.time())
     return {
         "status": "online",
-        "bot": "Team Narzo Anime Bot",
+        "bot": "Team Narzo Bot",
         "version": "3.0",
         "timestamp": datetime.now().isoformat(),
-        "storage": "MongoDB" if STORAGE.use_mongo else "JSON",
         "uptime_seconds": round(uptime, 2)
     }
 
 @api.get("/stats")
 async def api_stats():
-    """Statistics endpoint"""
     users = await STORAGE.get_all_users()
     groups = await STORAGE.get_all_groups()
     filters_dict = await STORAGE.get_all_filters()
@@ -898,13 +754,11 @@ async def api_stats():
         "total_groups": len(groups),
         "total_filters": len(filters_dict),
         "total_files": sum(len(v) for v in filters_dict.values()),
-        "total_searches": stats.get('total_searches', 0),
-        "storage_type": "MongoDB" if STORAGE.use_mongo else "JSON"
+        "total_searches": stats.get('total_searches', 0)
     }
 
 
 def run_api():
-    """Run FastAPI server"""
     port = int(os.environ.get("PORT", 8000))
     try:
         logger.info(f"Starting FastAPI on port {port}")
@@ -914,18 +768,14 @@ def run_api():
 
 
 def start_bot():
-    """Start bot"""
     logger.info("Starting Team Narzo Bot...")
-    logger.info(f"Storage: {'MongoDB' if STORAGE.use_mongo else 'JSON'}")
     logger.info(f"Admins: {len(ADMIN_IDS)}")
     
     try:
         app.run()
     except Exception as e:
-        logger.error(f"Bot failed to start: {e}")
+        logger.error(f"Bot failed: {e}")
 
-
-# --- Main ---
 
 if __name__ == "__main__":
     print("""
@@ -935,9 +785,7 @@ if __name__ == "__main__":
 ╚══════════════════════════════════╝
     """)
     
-    # Start API in background
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
     
-    # Start bot
     start_bot()
