@@ -12,6 +12,7 @@ from pyrogram.errors import (
     UserIsBlocked, PeerIdInvalid, RPCError, FloodWait, 
     ChatAdminRequired, UserNotParticipant, MessageDeleteForbidden
 )
+from motor.motor_asyncio import AsyncIOMotorClient
 from fastapi import FastAPI
 import uvicorn
 import threading
