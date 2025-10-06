@@ -1,7 +1,6 @@
-pyrogram==2.0.106
+Pyrogram==2.0.106
 TgCrypto==1.2.5
 motor==3.3.2
 python-dotenv==1.0.0
 fastapi==0.109.0
-uvicorn==0.27.0
-google-cloud-datastore>=2.15.0
+uvicorn[standard]==0.27.0
