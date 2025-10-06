@@ -1,10 +1,6 @@
-# Core Telegram Bot Framework
-pyrogram>=2.0.106 # The asynchronous Telegram client framework
-
-# Database and Asynchronous Operations
-motor[asyncio]>=3.3.2 # Asynchronous MongoDB driver for asyncio (Motor)
-fastapi>=0.104.1 # Modern, fast web framework for the API
-uvicorn>=0.24.0.post1 # ASGI server for running FastAPI
-
-# Configuration and Utilities
-python-dotenv>=1.0.0 # For loading environment variables from a .env file
+pyrogram==2.0.106
+TgCrypto==1.2.5
+motor==3.3.2
+python-dotenv==1.0.0
+fastapi==0.109.0
+uvicorn==0.27.0
