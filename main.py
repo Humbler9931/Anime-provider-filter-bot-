@@ -10,7 +10,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from pyrogram.enums import ParseMode, ChatType
 from pyrogram.errors import (
     UserIsBlocked, PeerIdInvalid, RPCError, FloodWait, 
-    ChatAdminRequired, UserNotParticipant, MessageDeleteForbidden
+    ChatAdminRequired, UserNotParticipant, MessageDeleteForbidden, MessageNotModified
 )
 from fastapi import FastAPI
 import uvicorn
@@ -94,6 +94,8 @@ class Storage:
                     with open(filename, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         if attr_name == 'local_stats':
+                            # Ensure 'bot_started' is preserved if available
+                            data['bot_started'] = data.get('bot_started', time.time())
                             self.local_stats.update(data)
                         else:
                             setattr(self, attr_name, data)
@@ -397,7 +399,9 @@ async def broadcast_handler(client: Client, message: Message):
                     f"✅ Sent: `{success}` | ❌ Failed: `{failed}`",
                     parse_mode=ParseMode.MARKDOWN
                 )
-            except:
+            except MessageNotModified:
+                pass
+            except Exception:
                 pass
     
     duration = round(time.time() - start_time, 2)
@@ -492,7 +496,7 @@ async def list_filters_handler(client: Client, message: Message):
     )
 
 
-# Keyword Matching Handler
+# Keyword Matching Handler (FIXED)
 @app.on_message(
     filters.text & 
     (filters.private | filters.group) &
@@ -517,8 +521,10 @@ async def keyword_match_handler(client: Client, message: Message):
         
     elif message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         try:
-            member_count = await client.get_chat_members_count(message.chat.id)
-        except:
+            # Use client.get_chat to get member count, which is more reliable
+            chat_info = await client.get_chat(message.chat.id)
+            member_count = chat_info.members_count if chat_info.members_count else 0
+        except Exception:
             member_count = 0
 
         chat_data = {
@@ -537,6 +543,7 @@ async def keyword_match_handler(client: Client, message: Message):
         if not keyword:
             continue
             
+        # Use word boundaries for more accurate matching
         regex = r'\b' + re.escape(keyword) + r'\b'
         if re.search(regex, text):
             matched_keywords.append(keyword)
@@ -544,22 +551,35 @@ async def keyword_match_handler(client: Client, message: Message):
     if matched_keywords:
         await STORAGE.increment_stat('total_searches')
         
+        # Limit the number of keywords and files to prevent spam/flood
         for keyword in matched_keywords[:5]:
             files = all_filters.get(keyword, [])
             
             for file_data in files[:10]:
                 try:
+                    # FIX: Fetch the original message to get the reply_markup (buttons)
+                    original_message = await client.get_messages(
+                        chat_id=file_data["chat_id"],
+                        message_ids=file_data["message_id"]
+                    )
+                    
+                    # Copy the message, including the reply_markup if present
                     await client.copy_message(
                         chat_id=message.chat.id,
                         from_chat_id=file_data["chat_id"],
-                        message_id=file_data["message_id"]
+                        message_id=file_data["message_id"],
+                        reply_markup=original_message.reply_markup  # <-- FIX APPLIED HERE
                     )
+                    
                     await asyncio.sleep(0.5)
                 
                 except FloodWait as e:
+                    logger.warning(f"FloodWait: sleeping for {e.value}s")
                     await asyncio.sleep(e.value)
+                except MessageDeleteForbidden:
+                    logger.warning(f"Filter message {file_data['message_id']} deleted/unavailable in {file_data['chat_id']}. Skipping.")
                 except Exception as e:
-                    logger.error(f"Error forwarding: {e}")
+                    logger.error(f"Error copying message for filter '{keyword}': {e}")
 
 
 # Callback Handler
@@ -579,10 +599,10 @@ async def callback_handler(client: Client, callback_query: CallbackQuery):
 • `/myinfo` - Your stats
 
 **Admin Commands:**
-• `/addfilter <keyword>` - Add filter
+• `/addfilter <keyword>` - Add filter (Reply to message)
 • `/delfilter <keyword>` - Delete filter
 • `/listfilters` - List filters
-• `/broadcast` - Broadcast message
+• `/broadcast` - Broadcast message (Reply to message)
 • `/stats` - Bot statistics
 """
             
@@ -611,7 +631,15 @@ Use buttons below to navigate.
                     InlineKeyboardButton("📚 Commands", callback_data="help_commands"),
                     InlineKeyboardButton("ℹ️ About", callback_data="about_info")
                 ],
-                [InlineKeyboardButton("📊 My Stats", callback_data="user_stats")]
+                [InlineKeyboardButton("📊 My Stats", callback_data="user_stats")],
+                 [
+                    InlineKeyboardButton("➕ Add Me To Group ➕", 
+                                       url=f"http://t.me/{client.me.username}?startgroup=true")
+                ],
+                [
+                    InlineKeyboardButton("💬 Support", url=f"https://t.me/+Y3SlUxZiUoc5MzNl"),
+                    InlineKeyboardButton("📢 Updates", url=f"https://t.me/narzoxbot")
+                ]
             ])
             
             await callback_query.edit_message_text(
@@ -633,7 +661,7 @@ Use buttons below to navigate.
 • Storage: `JSON`
 
 **Developer:** TEAM NARZO
-**Support:** @{SUPPORT_CHAT}
+**Support:** [Support Chat](https://t.me/+Y3SlUxZiUoc5MzNl)
 """
             
             keyboard = InlineKeyboardMarkup([
@@ -643,7 +671,8 @@ Use buttons below to navigate.
             await callback_query.edit_message_text(
                 about_text,
                 reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
             )
 
         elif data == "user_stats":
@@ -656,136 +685,4 @@ Use buttons below to navigate.
 📊 **YOUR STATISTICS**
 
 **Name:** {callback_query.from_user.first_name}
-**User ID:** `{user_id}`
-**Joined:** {join_date.strftime('%d %b %Y')}
-**Searches:** `{user_info.get('search_count', 0)}`
-"""
-            else:
-                stats_text = "❌ No stats found. Use /start first!"
-            
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 Back", callback_data="back_to_start")]
-            ])
-            
-            await callback_query.edit_message_text(
-                stats_text,
-                reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-        elif data == "refresh_stats":
-            if user_id in ADMIN_IDS:
-                await callback_query.answer("Refreshing...", show_alert=False)
-                if callback_query.message:
-                    await stats_handler(client, callback_query.message)
-            else:
-                await callback_query.answer("❌ Admin only!", show_alert=True)
-
-        else:
-            await callback_query.answer()
-            
-    except Exception as e:
-        logger.error(f"Callback error: {e}")
-        await callback_query.answer("❌ Error occurred!", show_alert=True)
-
-
-# My Info Command
-@app.on_message(filters.command("myinfo"))
-async def my_info_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    user_info = await STORAGE.get_user_info(user_id)
-    
-    if user_info:
-        join_date = datetime.fromtimestamp(user_info.get('join_date', time.time()))
-        
-        info_text = f"""
-👤 **YOUR INFO**
-
-**Name:** {message.from_user.first_name}
-**Username:** @{message.from_user.username or 'Not Set'}
-**User ID:** `{user_id}`
-**Joined:** {join_date.strftime('%d %b %Y')}
-**Searches:** `{user_info.get('search_count', 0)}`
-**Status:** {'Admin 👑' if user_id in ADMIN_IDS else 'Member'}
-"""
-    else:
-        info_text = "❌ No info found. Use /start first!"
-    
-    await message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
-
-
-# Help Command
-@app.on_message(filters.command("help"))
-async def help_handler(client: Client, message: Message):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📚 View Commands", callback_data="help_commands")]
-    ])
-    
-    await message.reply_text(
-        "**👋 Need Help?**\n\nClick below for all commands!",
-        reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-# FastAPI Setup
-api = FastAPI(title="Team Narzo Bot API", version="3.0")
-
-@api.get("/")
-def health_check():
-    uptime = time.time() - STORAGE.local_stats.get('bot_started', time.time())
-    return {
-        "status": "online",
-        "bot": "Team Narzo Bot",
-        "version": "3.0",
-        "timestamp": datetime.now().isoformat(),
-        "uptime_seconds": round(uptime, 2)
-    }
-
-@api.get("/stats")
-async def api_stats():
-    users = await STORAGE.get_all_users()
-    groups = await STORAGE.get_all_groups()
-    filters_dict = await STORAGE.get_all_filters()
-    stats = await STORAGE.get_stats()
-    
-    return {
-        "total_users": len(users),
-        "total_groups": len(groups),
-        "total_filters": len(filters_dict),
-        "total_files": sum(len(v) for v in filters_dict.values()),
-        "total_searches": stats.get('total_searches', 0)
-    }
-
-
-def run_api():
-    port = int(os.environ.get("PORT", 8000))
-    try:
-        logger.info(f"Starting FastAPI on port {port}")
-        uvicorn.run(api, host="0.0.0.0", port=port, log_level="warning")
-    except Exception as e:
-        logger.error(f"FastAPI failed: {e}")
-
-
-def start_bot():
-    logger.info("Starting Team Narzo Bot...")
-    logger.info(f"Admins: {len(ADMIN_IDS)}")
-    
-    try:
-        app.run()
-    except Exception as e:
-        logger.error(f"Bot failed: {e}")
-
-
-if __name__ == "__main__":
-    print("""
-╔══════════════════════════════════╗
-║   🎭 TEAM NARZO ANIME BOT 🎭    ║
-║      Advanced Edition v3.0       ║
-╚══════════════════════════════════╝
-    """)
-    
-    api_thread = threading.Thread(target=run_api, daemon=True)
-    api_thread.start()
-    
-    start_bot()
+**User ID:** `{user_id}
