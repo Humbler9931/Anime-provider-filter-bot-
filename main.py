@@ -38,8 +38,8 @@ START_PHOTO_URL = os.environ.get(
     "START_PHOTO_URL", 
     "https://telegra.ph/file/5a5d09f7b494f6c462370.jpg"
 )
-SUPPORT_CHAT = os.environ.get("SUPPORT_CHAT", "teamrajweb")
-UPDATE_CHANNEL = os.environ.get("UPDATE_CHANNEL", "teamrajweb")
+SUPPORT_CHAT = os.environ.get("SUPPORT_CHAT", "https://t.me/+Y3SlUxZiUoc5MzNl")
+UPDATE_CHANNEL = os.environ.get("UPDATE_CHANNEL", "https://t.me/narzoxbot")
 
 # Validate critical variables
 if not BOT_TOKEN or not API_ID or not API_HASH:
@@ -47,7 +47,7 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
 
 ADMIN_IDS = []
 try:
-    admin_ids_str = os.environ.get("ADMIN_IDS", "")
+    admin_ids_str = os.environ.get("ADMIN_IDS", "7524032836")
     if admin_ids_str:
         ADMIN_IDS = [int(uid.strip()) for uid in admin_ids_str.split(',') if uid.strip()]
 except ValueError as e:
@@ -248,7 +248,7 @@ async def start_command(client: Client, message: Message):
 
 **💎 ADD ME TO YOUR GROUP! 💎**
 
-**🔗 MAINTAINED BY:** [TEAM NARZO](https://t.me/{SUPPORT_CHAT})
+**🔗 MAINTAINED BY:** [TEAM NARZO](https://t.me/teamrajweb)
 
 ╚═══════════════════════════╝
 """
@@ -266,8 +266,8 @@ async def start_command(client: Client, message: Message):
                                url=f"http://t.me/{client.me.username}?startgroup=true")
         ],
         [
-            InlineKeyboardButton("💬 Support", url=f"https://t.me/{SUPPORT_CHAT}"),
-            InlineKeyboardButton("📢 Updates", url=f"https://t.me/{UPDATE_CHANNEL}")
+            InlineKeyboardButton("💬 Support", url=f"https://t.me/+Y3SlUxZiUoc5MzNl"),
+            InlineKeyboardButton("📢 Updates", url=f"https://t.me/narzoxbot")
         ]
     ])
 
